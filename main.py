@@ -6,7 +6,7 @@ from typing import Union
 
 import sys
 from PyQt5 import QtCore, uic
-from PyQt5.QtChart import QChart, QChartView, QLineSeries, QDateTimeAxis, QValueAxis
+from PyQt5.QtChart import QChart, QChartView, QValueAxis, QBarCategoryAxis, QBarSeries, QBarSet
 from PyQt5.QtCore import Qt, QDate, QDateTime
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPainter, QCursor
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QWidget, QFileDialog, QMessageBox, QTableWidgetItem, QSpinBox,
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         self.dish_data_table_model = QStandardItemModel(0, 6)
         self.dish_data_table_proxy = TableFilter()
         self.graph_chart = None
-        self.graph_line_series = {}
+        self.graph_series = {}
 
         # Load UI designs
         uic.loadUi(self.MAIN_UI_FILE, self)
@@ -494,55 +494,30 @@ class MainWindow(QMainWindow):
             del self.graph_line_series[old_key]
 
     def update_series(self, item: QStandardItem):
-        def get_index(data_point, sorted_list):
-            start = 0
-            end = len(sorted_list) - 1
-            if end < start:
-                return 0
-            mid = (end - start) // 2
-            while end - start > 1:
-                if data_point < sorted_list[mid]:
-                    end = mid
-                else:
-                    start = mid
-                mid = (end - start) // 2
-            if sorted_list[start] > data_point:
-                return start
-            elif sorted_list[end] < data_point:
-                return end
-            else:
-                return start + 1
-
         if item.column() == 5:  # check for checkbox column
             item_idx = item.index()
             date = self.dish_data_table_model.data(item_idx.siblingAtColumn(1))
             dish_name = self.dish_data_table_model.data(item_idx.siblingAtColumn(2))
             dish_price = self.dish_data_table_model.data(item_idx.siblingAtColumn(3))
             sell_num = self.dish_data_table_model.data(item_idx.siblingAtColumn(4))
-            series_name = dish_name + "(" + dish_price + ")"
-            if series_name not in self.graph_line_series:
-                self.graph_line_series[series_name] = []
+            set_name = dish_name + "(" + dish_price + ")"
+            key = str(QDateTime(QDate.fromString(date, "yyyy-MM-dd")).toSecsSinceEpoch())
+            if key not in self.graph_series:
+                self.graph_series[key] = {}
 
-            point = (QDateTime(QDate.fromString(date, "yyyy-MM-dd")).toMSecsSinceEpoch(), int(sell_num))
             if int(item.text()) == 0:
-                try:
-                    self.graph_line_series[series_name].remove(point)
-                    if len(self.graph_line_series[series_name]) == 0:
-                        del self.graph_line_series[series_name]
-                except ValueError:
-                    pass
+                if set_name in self.graph_series[key]:
+                    del self.graph_series[key][set_name]
+                if not self.graph_series[key]:
+                    del self.graph_series[key]
             else:
-                if point not in self.graph_line_series[series_name]:
-                    # target_idx = get_index(point, self.graph_line_series[series_name])
-                    self.graph_line_series[series_name].append(point)
-                    self.graph_line_series[series_name].sort()
+                self.graph_series[key][set_name] = int(sell_num)
 
     def update_graph(self, index):
         if index == 2:
             self.graph_chart.removeAllSeries()
 
-            axis_x = QDateTimeAxis()
-            axis_x.setFormat("yyyy年MM月dd日")
+            axis_x = QBarCategoryAxis()
             axis_x.setTitleText("日期")
             if self.graph_chart.axisX():
                 self.graph_chart.removeAxis(self.graph_chart.axisX())
@@ -556,31 +531,35 @@ class MainWindow(QMainWindow):
             self.graph_chart.addAxis(axis_y, Qt.AlignLeft)
 
             max_num = 0
-            min_time = QDateTime.currentDateTime().toMSecsSinceEpoch()
-            max_time = 0
-            for key, data in self.graph_line_series.items():
-                series = QLineSeries()
-                series.setName(key)
-                series.setPointsVisible(True)
-                series.hovered.connect(self.graph_tooltip)
-                for point in data:
-                    series.append(*point)
-                    max_num = max(max_num, point[1])
-                    max_time = max(max_time, point[0])
-                    min_time = min(min_time, point[0])
-                self.graph_chart.addSeries(series)
-                series.attachAxis(axis_x)
-                series.attachAxis(axis_y)
+            total_date = 0
+            set_dict = {}
+            for key, data in sorted(self.graph_series.items(), key=lambda i: int(i[0])):
+                axis_x.append(QDateTime.fromSecsSinceEpoch(int(key)).toString("yyyy年MM月dd日"))
+                for set_name, value in data.items():
+                    if set_name not in set_dict:
+                        set_dict[set_name] = QBarSet(set_name)
+                        for _ in range(total_date):
+                            set_dict[set_name].append(0)
+                    set_dict[set_name].append(value)
+                    max_num = max(max_num, value)
+                total_date += 1
+                for _, bar_set in set_dict.items():
+                    if bar_set.count() < total_date:
+                        bar_set.append(0)
+            bar_series = QBarSeries()
+            for _, bar_set in set_dict.items():
+                bar_series.append(bar_set)
+            bar_series.hovered.connect(self.graph_tooltip)
             axis_y.setMax(max_num+1)
             axis_y.setMin(0)
-            axis_x.setMax(QDateTime.fromMSecsSinceEpoch(max_time))
-            axis_x.setMin(QDateTime.fromMSecsSinceEpoch(min_time))
+            self.graph_chart.addSeries(bar_series)
+            bar_series.attachAxis(axis_x)
+            bar_series.attachAxis(axis_y)
 
-    def graph_tooltip(self, point, state):
-        series = self.sender()
-        if state:
+    def graph_tooltip(self, status, index, bar_set: QBarSet):
+        if status:
             QToolTip.showText(QCursor.pos(), "{}\n日期: {}\n售出: {}".format(
-                series.name(), QDateTime.fromMSecsSinceEpoch(point.x()).toString("yyyy年MM月dd日"), round(point.y())))
+                bar_set.label(), self.graph_chart.axisX().at(index), int(bar_set.at(index))))
 
 
 if __name__ == "__main__":
