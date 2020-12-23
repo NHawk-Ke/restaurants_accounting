@@ -533,8 +533,9 @@ class MainWindow(QMainWindow):
                     pass
             else:
                 if point not in self.graph_line_series[series_name]:
-                    target_idx = get_index(point, self.graph_line_series[series_name])
-                    self.graph_line_series[series_name].insert(target_idx, point)
+                    # target_idx = get_index(point, self.graph_line_series[series_name])
+                    self.graph_line_series[series_name].append(point)
+                    self.graph_line_series[series_name].sort()
 
     def update_graph(self, index):
         if index == 2:
